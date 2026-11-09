@@ -1,7 +1,7 @@
 # Powerhook
 
-A tiny HTTP API to **suspend**, **power off** and **restart** a PC remotely,
-e.g. from Home Assistant.
+A small API that lets you **suspend**, **power off** and
+**restart** a PC over HTTP, e.g. from Home Assistant.
 
 - Bearer-token auth (constant-time compare), or IP allowlist only if you prefer
 - IP allowlist (single addresses or CIDR ranges), checked before the token

@@ -43,6 +43,15 @@ func RestartIfRunning() (bool, error) {
 	return true, runSystemctl("restart", unitName)
 }
 
+// Restart starts or restarts the systemd unit. installed is false when there
+// is no unit to start.
+func Restart() (installed bool, err error) {
+	if _, err := os.Stat(unitPath); err != nil {
+		return false, nil
+	}
+	return true, runSystemctl("restart", unitName)
+}
+
 func unitEnabled(u string) bool {
 	out, _ := exec.Command("systemctl", "is-enabled", u).Output()
 	return strings.TrimSpace(string(out)) == "enabled"

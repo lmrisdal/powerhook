@@ -115,6 +115,24 @@ func RestartIfRunning() (bool, error) {
 	return true, s.Start()
 }
 
+// Restart starts or restarts the service. installed is false when it isn't
+// registered.
+func Restart() (installed bool, err error) {
+	m, s, err := openService()
+	if err != nil {
+		return false, err
+	}
+	defer m.Disconnect()
+	if s == nil {
+		return false, nil
+	}
+	defer s.Close()
+	if err := stopService(s); err != nil {
+		return true, err
+	}
+	return true, s.Start()
+}
+
 // AdminHint is appended to permission errors.
 const AdminHint = "run it from an Administrator terminal"
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install powerhook on Linux: download the latest prebuilt release binary,
+# Install Powerhook on Linux: download the latest prebuilt release binary,
 # write a config with a fresh token, install the systemd service and open the
 # firewall (firewalld or ufw) for the allowed IPs.
 #
@@ -20,13 +20,16 @@ if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
 fi
 
 ASSUME_YES=0
+OPEN_FIREWALL=1
+REQUIRE_TOKEN=true # stays true with -y or when an existing config is kept
 
 usage() {
   cat <<'USAGE'
-Install powerhook: binary, config, systemd service and firewall rules.
+Install Powerhook: binary, config, systemd service and firewall rules.
 
 Options:
   -y, --yes      don't prompt
+  --no-firewall  don't add firewall rules
   -h, --help     show this help
 USAGE
 }
@@ -34,6 +37,7 @@ USAGE
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -y|--yes)  ASSUME_YES=1 ;;
+    --no-firewall) OPEN_FIREWALL=0 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1 (try --help)" >&2; exit 1 ;;
   esac
@@ -77,7 +81,7 @@ fetch_repo_file() {
   fi
 }
 
-echo "==> Downloading powerhook ($ARCH)"
+echo "==> Downloading Powerhook ($ARCH)"
 asset="powerhook-linux-$ARCH"
 if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/powerhook" ]]; then
   cp "$SCRIPT_DIR/powerhook" "$TMP/powerhook"
@@ -95,7 +99,7 @@ else
       tar -xzf "$TMP/source.tar.gz" -C "$TMP"
       src="$(find "$TMP" -maxdepth 2 -type f -name go.mod -exec dirname {} \; | head -n 1)"
       if [[ -z "$src" ]]; then
-        echo "Could not find powerhook source in tarball" >&2
+        echo "Could not find Powerhook source in tarball" >&2
         exit 1
       fi
       (cd "$src" && CGO_ENABLED=0 go build -o "$TMP/powerhook" .)
@@ -118,12 +122,17 @@ echo "==> Installing config to $CONF"
 if sudo test -f "$CONF"; then
   echo "    $CONF already exists, leaving it untouched"
 else
-  ALLOW="$(ask "IP address(es) allowed to call the API (comma-separated):")"
+  ans="$(ask "Require a bearer token? [Y/n]:")"
+  if [[ "$ans" =~ ^[[:space:]]*[nN] ]]; then REQUIRE_TOKEN=false; fi
+  ALLOW="$(ask "IP address(es) allowed to call the API (comma-separated, leave blank to skip IP restriction):")"
   ips_json=""
   for ip in ${ALLOW//,/ }; do
     ips_json+="${ips_json:+, }\"$ip\""
   done
-  token="$("$TMP/powerhook" token)"
+  token=""
+  if [[ "$REQUIRE_TOKEN" == true ]]; then
+    token="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
+  fi
   fetch_repo_file "packaging/config.example.json" "$TMP/config.json"
   sed -i \
     -e "s|\"CHANGE_ME\"|\"$token\"|" \
@@ -131,10 +140,31 @@ else
     "$TMP/config.json"
   sudo install -d -m700 "$CONF_DIR"
   sudo install -m600 "$TMP/config.json" "$CONF"
+  allowed="${ips_json//\"/}"
   echo
-  echo "    token: $token"
-  echo "    Clients send it as: Authorization: Bearer <token>"
+  if [[ "$REQUIRE_TOKEN" == true ]]; then
+    echo "    token: $token"
+    echo "    Clients send it as: Authorization: Bearer <token>"
+  else
+    echo "    Token auth is off. To turn it on later, set \"token\" in $CONF"
+    echo "    (e.g. to the output of: openssl rand -base64 32), then run: sudo powerhook reload"
+  fi
+  echo "    Allowed addresses: ${allowed:-any}"
   echo
+  if [[ "$REQUIRE_TOKEN" == false && -z "$ips_json" ]]; then
+    cat >&2 <<WARN
+    ######################################################################
+    #  WARNING: NO TOKEN AND NO IP RESTRICTION
+    #
+    #  Anyone who can reach port 9876 on this machine can suspend,
+    #  power off or restart it. Only do this on a network you fully trust.
+    #
+    #  To lock it down later, edit $CONF, then run:
+    #    sudo powerhook reload
+    ######################################################################
+WARN
+    echo
+  fi
 fi
 
 echo "==> Installing systemd unit"
@@ -147,18 +177,30 @@ if ! sudo "$BIN" --config "$CONF" status >/dev/null; then
   echo
   echo "The config isn't valid yet (see the error above). Fix it, then finish with:"
   echo "  sudo nano $CONF"
-  echo "  sudo powerhook firewall"
-  echo "  sudo systemctl restart $UNIT"
+  echo "  sudo powerhook reload"
   exit 1
 fi
 
-echo "==> Opening firewall"
-sudo "$BIN" --config "$CONF" firewall
+# reload asks about the firewall itself, then starts the service.
+reload_args=()
+if [[ "$OPEN_FIREWALL" -eq 0 ]]; then
+  reload_args+=(--no)
+elif [[ "$ASSUME_YES" -eq 1 ]]; then
+  reload_args+=(--yes)
+fi
+echo "==> Configuring firewall and starting service"
+sudo "$BIN" --config "$CONF" reload ${reload_args[@]+"${reload_args[@]}"}
 
-echo "==> Starting service"
-sudo systemctl restart "$UNIT"
+# The LAN address other machines will use: the source address of the default
+# route. Falls back to the hostname if that can't be found.
+HOST_ADDR="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p')"
+HOST_ADDR="${HOST_ADDR:-$(hostname)}"
 
 echo
-echo "Done. powerhook is listening; check it with:"
+echo "Done. Powerhook is listening; check it with:"
 echo "  journalctl -u $UNIT -f"
-echo "  curl -H 'Authorization: Bearer <token>' http://$(hostname):9876/api/status"
+if [[ "$REQUIRE_TOKEN" == true ]]; then
+  echo "  curl -H 'Authorization: Bearer <token>' http://$HOST_ADDR:9876/api/status"
+else
+  echo "  curl http://$HOST_ADDR:9876/api/status"
+fi

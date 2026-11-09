@@ -1,12 +1,23 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+// NewToken returns a random token long enough to pass validation.
+func NewToken() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
 
 func writeConfig(t *testing.T, body string) string {
 	t.Helper()
@@ -41,12 +52,10 @@ func TestConfigErrors(t *testing.T) {
 	tok := NewToken()
 	cases := []struct{ name, body, want string }{
 		{"short token", `{"token":"short","allowed_ips":["1.2.3.4"]}`, "token"},
-		{"no allowed ips", `{"token":"` + tok + `","allowed_ips":[]}`, "allowed_ips"},
+		{"placeholder token", `{"token":"CHANGE_ME","allowed_ips":["1.2.3.4"]}`, "token"},
 		{"bad ip", `{"token":"` + tok + `","allowed_ips":["192.168.1"]}`, "not a valid"},
 		{"bad listen", `{"listen":"9876","token":"` + tok + `","allowed_ips":["1.2.3.4"]}`, "listen"},
 		{"unknown key", `{"token":"` + tok + `","allowed_ip":["1.2.3.4"]}`, "unknown field"},
-		{"no token, allow all v4", `{"require_token":false,"allowed_ips":["192.168.1.5","0.0.0.0/0"]}`, "allows everyone"},
-		{"no token, allow all v6", `{"require_token":false,"allowed_ips":["::/0"]}`, "allows everyone"},
 	}
 	for _, c := range cases {
 		_, err := Load(writeConfig(t, c.body))
@@ -57,16 +66,16 @@ func TestConfigErrors(t *testing.T) {
 }
 
 func TestRequireToken(t *testing.T) {
-	c, err := Load(writeConfig(t, `{"require_token":false,"allowed_ips":["192.168.1.5"]}`))
+	c, err := Load(writeConfig(t, `{"token":"","allowed_ips":["192.168.1.5"]}`))
 	if err != nil {
-		t.Fatalf("token should be optional with require_token false: %v", err)
+		t.Fatalf("empty token should be allowed: %v", err)
 	}
 	if c.TokenRequired() {
 		t.Error("TokenRequired() = true, want false")
 	}
 	c, err = Load(writeConfig(t, `{"token":"`+NewToken()+`","allowed_ips":["192.168.1.5"]}`))
 	if err != nil || !c.TokenRequired() {
-		t.Errorf("token should be required by default: %v", err)
+		t.Errorf("token should be required when set: %v", err)
 	}
 }
 
@@ -77,5 +86,29 @@ func TestBOMAndSingleIP(t *testing.T) {
 	}
 	if got := c.Allowed[0].String(); got != "192.168.1.10/32" {
 		t.Errorf("single IP parsed as %s", got)
+	}
+}
+
+func TestOpenConfigs(t *testing.T) {
+	cases := []struct {
+		name, body         string
+		anyIP, unprotected bool
+	}{
+		{"token, empty allowlist", `{"token":"` + NewToken() + `","allowed_ips":[]}`, true, false},
+		{"no token, missing allowlist", `{}`, true, true},
+		{"no token, both catch-alls", `{"allowed_ips":["0.0.0.0/0","::/0"]}`, true, true},
+		{"no token, v4 catch-all only", `{"allowed_ips":["0.0.0.0/0"]}`, false, false},
+		{"no token, single ip", `{"allowed_ips":["192.168.1.5"]}`, false, false},
+	}
+	for _, c := range cases {
+		cfg, err := Load(writeConfig(t, c.body))
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		if cfg.AllowsAnyIP() != c.anyIP || cfg.Unprotected() != c.unprotected {
+			t.Errorf("%s: AllowsAnyIP=%v Unprotected=%v, want %v %v",
+				c.name, cfg.AllowsAnyIP(), cfg.Unprotected(), c.anyIP, c.unprotected)
+		}
 	}
 }

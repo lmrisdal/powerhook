@@ -83,8 +83,7 @@ func TestGuard(t *testing.T) {
 }
 
 func TestNoToken(t *testing.T) {
-	no := false
-	cfg := &config.Config{RequireToken: &no, AllowedIPs: []string{"192.168.1.10"}}
+	cfg := &config.Config{AllowedIPs: []string{"192.168.1.10"}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -94,6 +93,19 @@ func TestNoToken(t *testing.T) {
 	}
 	if c := do(h, "GET", "/api/status", "192.168.1.11:1", "").Code; c != 403 {
 		t.Errorf("other ip without token: got %d, want 403", c)
+	}
+}
+
+func TestEmptyAllowlist(t *testing.T) {
+	cfg := &config.Config{}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	h := New(cfg, &fakePower{}, "test").Handler()
+	for _, addr := range []string{"192.168.1.10:1", "203.0.113.7:1", "[2001:db8::1]:1"} {
+		if c := do(h, "GET", "/api/status", addr, "").Code; c != 200 {
+			t.Errorf("%s with empty allowlist: got %d, want 200", addr, c)
+		}
 	}
 }
 

@@ -52,10 +52,10 @@ func Run(version string, force bool) error {
 	latest := strings.TrimPrefix(rel.TagName, "v")
 	current := strings.TrimPrefix(version, "v")
 	if !force && latest == current {
-		fmt.Printf("Already up to date (powerhook %s).\n", version)
+		fmt.Printf("Already up to date (Powerhook %s).\n", version)
 		return nil
 	}
-	log.Printf("updating powerhook %s -> %s", current, latest)
+	log.Printf("updating Powerhook %s -> %s", current, latest)
 
 	self, err := os.Executable()
 	if err != nil {
@@ -109,14 +109,14 @@ func Run(version string, force bool) error {
 		}
 		return err
 	}
-	fmt.Printf("Updated powerhook to %s (%s).\n", latest, self)
+	fmt.Printf("Updated Powerhook to %s (%s).\n", latest, self)
 
 	restarted, err := service.RestartIfRunning()
 	if err != nil {
 		return fmt.Errorf("restart service: %w", err)
 	}
 	if restarted {
-		fmt.Println("Restarted the powerhook service.")
+		fmt.Println("Restarted the Powerhook service.")
 	}
 	return nil
 }

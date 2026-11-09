@@ -68,12 +68,17 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	notes := ""
 	if !s.cfg.TokenRequired() {
-		notes += " [no token: IP allowlist only]"
+		notes += " [no token]"
 	}
 	if s.cfg.DryRun {
 		notes += " [dry run]"
 	}
-	log.Printf("powerhook %s listening on %s (allowed: %s)%s", s.version, ln.Addr(), strings.Join(s.cfg.AllowedIPs, ", "), notes)
+	log.Printf("Powerhook %s listening on %s (allowed: %s)%s", s.version, ln.Addr(), s.cfg.AllowedList(), notes)
+	if s.cfg.Unprotected() {
+		for _, line := range strings.Split(config.UnprotectedWarning, "\n") {
+			log.Print(line)
+		}
+	}
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()

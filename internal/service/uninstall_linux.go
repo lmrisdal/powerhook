@@ -5,6 +5,7 @@ package service
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"powerhook/internal/config"
@@ -31,13 +32,16 @@ func installedComponents() ([]component, error) {
 						return err
 					}
 				}
-				if err := runSystemctl("disable", unitName); err != nil {
+				if err := runSystemctl("disable", "--quiet", unitName); err != nil {
 					return err
 				}
+				// Clear any failed state while systemd still knows the unit;
+				// after the file is gone it errors with "not loaded". Nothing
+				// to clear is fine, so ignore the result.
+				_ = exec.Command("systemctl", "reset-failed", unitName).Run()
 				if err := os.Remove(unitPath); err != nil && !os.IsNotExist(err) {
 					return err
 				}
-				_ = runSystemctl("reset-failed", unitName)
 				return runSystemctl("daemon-reload")
 			},
 		})

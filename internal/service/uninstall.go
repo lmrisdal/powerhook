@@ -30,7 +30,7 @@ func Uninstall() error {
 		return nil
 	}
 
-	fmt.Println("Installed powerhook components:")
+	fmt.Println("Installed Powerhook components:")
 	for i, c := range comps {
 		fmt.Printf("  %d) %s\n", i+1, c.name)
 	}
@@ -72,7 +72,7 @@ func Uninstall() error {
 		}
 	}
 	if len(toRemove) == len(comps) {
-		fmt.Println("\npowerhook has been fully uninstalled.")
+		fmt.Println("\nPowerhook has been fully uninstalled.")
 	} else {
 		fmt.Printf("\nRemoved %d component(s).\n", len(toRemove))
 	}

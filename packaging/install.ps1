@@ -1,4 +1,4 @@
-# Install powerhook on Windows: download the latest prebuilt release binary,
+# Install Powerhook on Windows: download the latest prebuilt release binary,
 # write a config with a fresh token, register the Windows service and open
 # Windows Firewall for the allowed IPs. Run from an Administrator PowerShell:
 #
@@ -15,6 +15,7 @@ $Bin = Join-Path $InstallDir 'powerhook.exe'
 $ConfDir = Join-Path $env:ProgramData 'powerhook'
 $Conf = Join-Path $ConfDir 'config.json'
 $Service = 'powerhook'
+$RequireToken = $true # stays true when an existing config is kept
 
 $identity = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $identity.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -27,7 +28,7 @@ if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
 $Tmp = Join-Path ([IO.Path]::GetTempPath()) ("powerhook-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $Tmp | Out-Null
 try {
-    Write-Host '==> Downloading powerhook (amd64)'
+    Write-Host '==> Downloading Powerhook (amd64)'
     $exe = Join-Path $Tmp 'powerhook.exe'
     $local = if ($PSScriptRoot) { Join-Path $PSScriptRoot '..\powerhook.exe' } else { $null }
     if ($local -and (Test-Path $local)) {
@@ -54,9 +55,16 @@ try {
     if (Test-Path $Conf) {
         Write-Host "    $Conf already exists, leaving it untouched"
     } else {
-        $Allow = Read-Host 'IP address(es) allowed to call the API (comma-separated)'
+        $answer = Read-Host 'Require a bearer token? [Y/n]'
+        $RequireToken = $answer -notmatch '^\s*n'
+        $Allow = Read-Host 'IP address(es) allowed to call the API (comma-separated, leave blank to skip IP restriction)'
         $ips = @($Allow -split '[,\s]+' | Where-Object { $_ })
-        $token = (& $Bin token).Trim()
+        $token = ''
+        if ($RequireToken) {
+            $bytes = New-Object byte[] 32
+            [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+            $token = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+        }
         $cfg = [ordered]@{
             listen           = ':9876'
             token            = $token
@@ -68,9 +76,31 @@ try {
         # WriteAllText writes UTF-8 without a BOM.
         [IO.File]::WriteAllText($Conf, (ConvertTo-Json -InputObject $cfg))
         Write-Host ''
-        Write-Host "    token: $token"
-        Write-Host "    Clients send it as: Authorization: Bearer <token>"
+        if ($RequireToken) {
+            Write-Host "    token: $token"
+            Write-Host "    Clients send it as: Authorization: Bearer <token>"
+        } else {
+            Write-Host "    Token auth is off. To turn it on later, set `"token`" in $Conf"
+            Write-Host "    to a random string of 16+ characters, then run: & '$Bin' reload"
+        }
+        $allowed = if ($ips.Count) { $ips -join ', ' } else { 'any' }
+        Write-Host "    Allowed addresses: $allowed"
         Write-Host ''
+        if (-not $RequireToken -and $ips.Count -eq 0) {
+            $warn = @(
+                '######################################################################'
+                '#  WARNING: NO TOKEN AND NO IP RESTRICTION'
+                '#'
+                '#  Anyone who can reach port 9876 on this machine can suspend,'
+                '#  power off or restart it. Only do this on a network you fully trust.'
+                '#'
+                "#  To lock it down later, edit $Conf, then run:"
+                "#    & '$Bin' reload"
+                '######################################################################'
+            )
+            $warn | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+            Write-Host ''
+        }
     }
 
     Write-Host '==> Registering Windows service'
@@ -78,7 +108,7 @@ try {
     if ($svc) {
         sc.exe config $Service binPath= $binPath start= auto | Out-Null
     } else {
-        New-Service -Name $Service -BinaryPathName $binPath -DisplayName 'powerhook' `
+        New-Service -Name $Service -BinaryPathName $binPath -DisplayName 'Powerhook' `
             -Description 'Remote suspend/poweroff/restart API' -StartupType Automatic | Out-Null
     }
     sc.exe failure $Service reset= 86400 actions= restart/5000/restart/5000/restart/30000 | Out-Null
@@ -88,22 +118,34 @@ try {
         Write-Host ''
         Write-Host 'The config is not valid yet (see the error above). Fix it, then finish with:'
         Write-Host "  notepad $Conf"
-        Write-Host "  & '$Bin' firewall"
-        Write-Host "  Start-Service $Service"
+        Write-Host "  & '$Bin' reload"
         exit 1
     }
 
-    Write-Host '==> Opening Windows Firewall'
-    & $Bin --config $Conf firewall
-    if ($LASTEXITCODE -ne 0) { throw 'Adding the firewall rule failed.' }
+    # reload asks about the firewall itself, then starts the service.
+    Write-Host '==> Configuring firewall and starting service'
+    & $Bin --config $Conf reload
+    if ($LASTEXITCODE -ne 0) { throw 'Applying the config failed.' }
 
-    Write-Host '==> Starting service'
-    Start-Service -Name $Service
+    # The LAN address other machines will use: the IPv4 address of the adapter
+    # with the default gateway. Falls back to the computer name.
+    $HostAddr = $null
+    try {
+        $HostAddr = Get-NetIPConfiguration |
+            Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } |
+            ForEach-Object { $_.IPv4Address.IPAddress } |
+            Select-Object -First 1
+    } catch {}
+    if (-not $HostAddr) { $HostAddr = $env:COMPUTERNAME }
 
     Write-Host ''
-    Write-Host 'Done. powerhook is listening; check it with:'
+    Write-Host 'Done. Powerhook is listening; check it with:'
     Write-Host "  Get-Content -Wait $(Join-Path $ConfDir 'powerhook.log')"
-    Write-Host "  curl.exe -H 'Authorization: Bearer <token>' http://$($env:COMPUTERNAME):9876/api/status"
+    if ($RequireToken) {
+        Write-Host "  curl.exe -H 'Authorization: Bearer <token>' http://${HostAddr}:9876/api/status"
+    } else {
+        Write-Host "  curl.exe http://${HostAddr}:9876/api/status"
+    }
 } finally {
     Remove-Item -Recurse -Force $Tmp -ErrorAction SilentlyContinue
 }

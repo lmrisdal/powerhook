@@ -2,10 +2,10 @@ package config
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/netip"
 	"os"
@@ -23,14 +23,11 @@ type Config struct {
 	Listen string `json:"listen,omitempty"`
 
 	// Token is the shared secret; clients send "Authorization: Bearer <token>".
-	Token string `json:"token,omitempty"`
-
-	// RequireToken: set to false to skip the token check and rely on the IP
-	// allowlist alone. Defaults to true.
-	RequireToken *bool `json:"require_token,omitempty"`
+	// Empty means no token is required.
+	Token string `json:"token"`
 
 	// AllowedIPs lists client addresses or CIDR ranges allowed to call the API.
-	// Everything else gets 403.
+	// Everything else gets 403. Empty means any address may call it.
 	AllowedIPs []string `json:"allowed_ips"`
 
 	// ActionDelayMS is the delay between answering the request and performing
@@ -62,7 +59,7 @@ func (c *Config) Port() string {
 
 // TokenRequired reports whether requests must carry the token.
 func (c *Config) TokenRequired() bool {
-	return c.RequireToken == nil || *c.RequireToken
+	return c.Token != ""
 }
 
 func (c *Config) ActionDelay() time.Duration {
@@ -74,13 +71,23 @@ func (c *Config) ActionDelay() time.Duration {
 
 func Load(path string) (*Config, error) {
 	if path == "" {
+		// A config in a directory only root can open (like /etc/powerhook)
+		// fails Stat with a permission error, not "not exist".
+		var denied []string
 		for _, p := range SearchPaths() {
-			if _, err := os.Stat(p); err == nil {
+			_, err := os.Stat(p)
+			if err == nil {
 				path = p
 				break
 			}
+			if errors.Is(err, fs.ErrPermission) {
+				denied = append(denied, p)
+			}
 		}
 		if path == "" {
+			if len(denied) > 0 {
+				return nil, fmt.Errorf("can't read %s (permission denied); run with sudo", strings.Join(denied, ", "))
+			}
 			return nil, fmt.Errorf("no config file found; checked %s", strings.Join(SearchPaths(), ", "))
 		}
 	}
@@ -108,10 +115,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("\"listen\" %q: %w", c.Listen, err)
 	}
 	if c.TokenRequired() && (len(c.Token) < minTokenLength || c.Token == "CHANGE_ME") {
-		return fmt.Errorf("\"token\" must be at least %d characters (generate one with: powerhook token), or set \"require_token\": false", minTokenLength)
-	}
-	if len(c.AllowedIPs) == 0 {
-		return fmt.Errorf("\"allowed_ips\" is empty; add the addresses allowed to call the API")
+		return fmt.Errorf("\"token\" must be at least %d characters (e.g. from: openssl rand -base64 32), or empty to not require one", minTokenLength)
 	}
 	c.Allowed = c.Allowed[:0]
 	for _, s := range c.AllowedIPs {
@@ -119,15 +123,48 @@ func (c *Config) Validate() error {
 		if err != nil {
 			return fmt.Errorf("\"allowed_ips\": %w", err)
 		}
-		// Without a token, the allowlist is the only protection; refuse to
-		// leave the API open to everyone.
-		if !c.TokenRequired() && p.Bits() == 0 {
-			return fmt.Errorf("\"allowed_ips\" contains %s, which allows everyone; that needs \"require_token\": true", p)
-		}
 		c.Allowed = append(c.Allowed, p)
+	}
+	if len(c.Allowed) == 0 {
+		c.Allowed = []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")}
 	}
 	return nil
 }
+
+// AllowsAnyIP reports whether every source address is allowed, either because
+// allowed_ips is empty or because it contains 0.0.0.0/0 and ::/0.
+func (c *Config) AllowsAnyIP() bool {
+	var v4, v6 bool
+	for _, p := range c.Allowed {
+		if p.Bits() == 0 {
+			if p.Addr().Is4() {
+				v4 = true
+			} else {
+				v6 = true
+			}
+		}
+	}
+	return v4 && v6
+}
+
+// AllowedList describes allowed_ips for logs and status output.
+func (c *Config) AllowedList() string {
+	if len(c.AllowedIPs) == 0 {
+		return "any address"
+	}
+	return strings.Join(c.AllowedIPs, ", ")
+}
+
+// Unprotected reports whether anyone who can reach the port can call the API:
+// no token and no IP restriction.
+func (c *Config) Unprotected() bool {
+	return !c.TokenRequired() && c.AllowsAnyIP()
+}
+
+// UnprotectedWarning is shown wherever an unprotected config is used.
+const UnprotectedWarning = `WARNING: no token and no IP restriction. Anyone who can reach this port can
+suspend, power off or restart this machine. Set a "token" or list addresses
+in "allowed_ips" unless the network itself is trusted.`
 
 // parsePrefix accepts a single address ("192.168.1.10") or a CIDR range.
 func ParsePrefix(s string) (netip.Prefix, error) {
@@ -145,12 +182,4 @@ func ParsePrefix(s string) (netip.Prefix, error) {
 	}
 	a = a.Unmap()
 	return netip.PrefixFrom(a, a.BitLen()), nil
-}
-
-func NewToken() string {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	return base64.RawURLEncoding.EncodeToString(b)
 }

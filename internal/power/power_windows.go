@@ -39,7 +39,7 @@ func (w win) shutdown(reboot bool) error {
 	if err := enableShutdownPrivilege(); err != nil {
 		return err
 	}
-	msg, _ := windows.UTF16PtrFromString("powerhook: remote power request")
+	msg, _ := windows.UTF16PtrFromString("Powerhook: remote power request")
 	if err := windows.InitiateSystemShutdownEx(nil, msg, 0, w.force, reboot, shutdownReason); err != nil {
 		return fmt.Errorf("InitiateSystemShutdownEx: %w", err)
 	}

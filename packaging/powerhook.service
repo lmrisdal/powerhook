@@ -1,0 +1,19 @@
+[Unit]
+Description=powerhook - remote suspend/poweroff/restart API
+Documentation=https://github.com/lmrisdal/powerhook
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/powerhook --config /etc/powerhook/config.json
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

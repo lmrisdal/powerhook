@@ -1,0 +1,9 @@
+{
+  "listen": ":9876",
+  "token": "CHANGE_ME",
+  "require_token": true,
+  "allowed_ips": ["192.168.1.5"],
+  "action_delay_ms": 1000,
+  "dry_run": false,
+  "force_close_apps": false
+}

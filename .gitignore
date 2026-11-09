@@ -1,0 +1,20 @@
+# Build output
+/dist/
+/powerhook
+/powerhook.exe
+*.exe
+*.test
+*.out
+coverage.*
+
+# Local config and logs (config.toml holds the token)
+config.toml
+*.log
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db

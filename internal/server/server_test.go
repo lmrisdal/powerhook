@@ -148,3 +148,57 @@ func TestStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestCommands(t *testing.T) {
+	cfg := &config.Config{
+		Token:      token,
+		AllowedIPs: []string{"192.168.1.10"},
+		Commands: map[string]config.Command{
+			"hello": {Exec: []string{"/bin/echo", "hi"}},
+			"alpha": {Exec: []string{"/bin/true"}},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	s := New(cfg, &fakePower{}, "test")
+	var pending []func()
+	s.after = func(_ time.Duration, fn func()) { pending = append(pending, fn) }
+	var ran []string
+	s.runCmd = func(c config.Command) error { ran = append(ran, strings.Join(c.Exec, " ")); return nil }
+	h := s.Handler()
+	auth, ip := "Bearer "+token, "192.168.1.10:1"
+
+	w := do(h, "GET", "/api/commands", ip, auth)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `["alpha","hello"]`) {
+		t.Fatalf("list: %d %s", w.Code, w.Body)
+	}
+	if c := do(h, "POST", "/api/commands/nope", ip, auth).Code; c != 404 {
+		t.Errorf("unknown command: got %d, want 404", c)
+	}
+	if c := do(h, "POST", "/api/commands/hello", "192.168.1.11:1", auth).Code; c != 403 {
+		t.Errorf("wrong ip: got %d, want 403", c)
+	}
+	if c := do(h, "POST", "/api/commands/hello", ip, "").Code; c != 401 {
+		t.Errorf("no token: got %d, want 401", c)
+	}
+	if c := do(h, "GET", "/api/commands/hello", ip, auth).Code; c != 405 {
+		t.Errorf("GET on command: got %d, want 405", c)
+	}
+	if len(ran) != 0 {
+		t.Fatalf("rejected requests ran commands: %v", ran)
+	}
+	if c := do(h, "POST", "/api/commands/hello", ip, auth).Code; c != http.StatusAccepted {
+		t.Fatalf("run: got %d", c)
+	}
+	if len(ran) != 0 {
+		t.Fatal("ran before the delay")
+	}
+	if c := do(h, "POST", "/api/commands/alpha", ip, auth).Code; c != http.StatusConflict {
+		t.Errorf("while pending: got %d, want 409", c)
+	}
+	pending[0]()
+	if got := strings.Join(ran, ","); got != "/bin/echo hi" {
+		t.Errorf("ran = %q", got)
+	}
+}

@@ -112,3 +112,31 @@ func TestOpenConfigs(t *testing.T) {
 		}
 	}
 }
+
+func TestCommands(t *testing.T) {
+	ok := `{"commands":{"boot-windows":{"exec":["/usr/local/bin/x","--a"],"timeout_s":5}}}`
+	c, err := Load(writeConfig(t, ok))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Commands["boot-windows"].Timeout(); got != 5*time.Second {
+		t.Errorf("timeout = %v", got)
+	}
+	if got := (Command{}).Timeout(); got != DefaultCommandTimeout {
+		t.Errorf("default timeout = %v", got)
+	}
+	bad := []struct{ name, body, want string }{
+		{"relative exec", `{"commands":{"a":{"exec":["x"]}}}`, "absolute"},
+		{"empty exec", `{"commands":{"a":{"exec":[]}}}`, "exec"},
+		{"missing exec", `{"commands":{"a":{}}}`, "exec"},
+		{"bad name", `{"commands":{"a b":{"exec":["/bin/true"]}}}`, "name"},
+		{"slash name", `{"commands":{"a/b":{"exec":["/bin/true"]}}}`, "name"},
+		{"bad timeout", `{"commands":{"a":{"exec":["/bin/true"],"timeout_s":99999}}}`, "timeout_s"},
+		{"unknown key", `{"commands":{"a":{"exec":["/bin/true"],"shell":"x"}}}`, "unknown field"},
+	}
+	for _, b := range bad {
+		if _, err := Load(writeConfig(t, b.body)); err == nil || !strings.Contains(err.Error(), b.want) {
+			t.Errorf("%s: got %v, want error containing %q", b.name, err, b.want)
+		}
+	}
+}

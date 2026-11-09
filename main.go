@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"powerhook/internal/config"
@@ -27,7 +28,7 @@ Usage:
 
 Commands:
   (none)           Run the API server. This is what the service runs.
-  status           Validate the config and print a summary.
+  status           Validate the config and print a summary (including commands).
   reload [-y | -n]  Apply the config: validate it, check the firewall rule
                    for allowed_ips (firewalld, ufw or Windows Firewall) and
                    ask before changing it, then start or restart the
@@ -164,6 +165,7 @@ func run(cfg *config.Config) error {
 // (from -y/-n). With no terminal to ask on, existing powerhook rules are
 // updated and none are added.
 func reload(cfg *config.Config, answer string) error {
+	printCommandWarnings(cfg)
 	if err := reloadFirewall(cfg, answer); err != nil {
 		return err
 	}
@@ -230,11 +232,21 @@ func status(cfg *config.Config) {
 	}
 	fmt.Printf("action delay: %s\n", cfg.ActionDelay())
 	fmt.Printf("dry_run:      %v\n", cfg.DryRun)
+	if names := cfg.CommandNames(); len(names) > 0 {
+		fmt.Printf("commands:     %s\n", strings.Join(names, ", "))
+	}
+	printCommandWarnings(cfg)
 	if cfg.Unprotected() {
 		// stderr, so it still shows when the installers discard stdout.
 		fmt.Fprintf(os.Stderr, "\n%s\n\n", config.UnprotectedWarning)
 	}
 	fmt.Println("OK")
+}
+
+func printCommandWarnings(cfg *config.Config) {
+	for _, w := range cfg.CommandWarnings() {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
+	}
 }
 
 // warnIfReadable warns when the config (which holds the token) is readable by

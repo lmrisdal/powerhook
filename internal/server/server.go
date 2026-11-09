@@ -17,6 +17,7 @@ import (
 
 	"powerhook/internal/config"
 	"powerhook/internal/power"
+	"powerhook/internal/runner"
 	"powerhook/internal/sysinfo"
 )
 
@@ -29,6 +30,8 @@ type Server struct {
 	busy      atomic.Bool
 	// after schedules fn to run after d. Replaced in tests.
 	after func(d time.Duration, fn func())
+	// runCmd runs a configured command. Replaced in tests.
+	runCmd func(config.Command) error
 }
 
 // New builds a Server.
@@ -39,6 +42,7 @@ func New(cfg *config.Config, ctl power.Controller, version string) *Server {
 		version:   version,
 		tokenHash: sha256.Sum256([]byte(cfg.Token)),
 		after:     func(d time.Duration, fn func()) { time.AfterFunc(d, fn) },
+		runCmd:    runner.Run,
 	}
 }
 
@@ -49,6 +53,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/poweroff", s.action("poweroff", s.power.Poweroff))
 	mux.HandleFunc("POST /api/restart", s.action("restart", s.power.Restart))
 	mux.HandleFunc("GET /api/status", s.status)
+	mux.HandleFunc("GET /api/commands", s.listCommands)
+	mux.HandleFunc("POST /api/commands/{name}", s.command)
 	return s.guard(mux)
 }
 
@@ -162,6 +168,28 @@ func (s *Server) action(name string, fn func() error) http.HandlerFunc {
 			}
 		})
 	}
+}
+
+func (s *Server) listCommands(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"commands": s.cfg.CommandNames()})
+}
+
+// command runs a configured command by name. The name is the only thing taken
+// from the request.
+func (s *Server) command(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	cmd, ok := s.cfg.Commands[name]
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown command"})
+		return
+	}
+	s.action("command:"+name, func() error {
+		if s.cfg.DryRun {
+			log.Printf("dry run: would run command %q", name)
+			return nil
+		}
+		return s.runCmd(cmd)
+	})(w, r)
 }
 
 type statusResponse struct {

@@ -9,6 +9,9 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -16,7 +19,30 @@ import (
 const (
 	DefaultListen  = ":9876"
 	minTokenLength = 16
+
+	DefaultCommandTimeout = 30 * time.Second
+	maxCommandTimeoutS    = 3600
 )
+
+var commandNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
+
+// Command is a named program the API may run. Callers pick it by name only;
+// nothing from the request reaches the command line.
+type Command struct {
+	// Exec is the program and its arguments. It is run directly, without a
+	// shell, and Exec[0] must be an absolute path.
+	Exec []string `json:"exec"`
+
+	// TimeoutS kills the command after this many seconds. Defaults to 30.
+	TimeoutS int `json:"timeout_s,omitempty"`
+}
+
+func (c Command) Timeout() time.Duration {
+	if c.TimeoutS <= 0 {
+		return DefaultCommandTimeout
+	}
+	return time.Duration(c.TimeoutS) * time.Second
+}
 
 type Config struct {
 	// Listen is the address to bind, e.g. ":9876". Defaults to ":9876".
@@ -40,6 +66,9 @@ type Config struct {
 	// ForceCloseApps (Windows only): don't let apps block shutdown/restart.
 	// Unsaved work in those apps is lost.
 	ForceCloseApps bool `json:"force_close_apps,omitempty"`
+
+	// Commands are named programs callable via POST /api/commands/<name>.
+	Commands map[string]Command `json:"commands,omitempty"`
 
 	Path    string         `json:"-"` // source file
 	Allowed []netip.Prefix `json:"-"` // parsed AllowedIPs
@@ -117,6 +146,20 @@ func (c *Config) Validate() error {
 	if c.TokenRequired() && (len(c.Token) < minTokenLength || c.Token == "CHANGE_ME") {
 		return fmt.Errorf("\"token\" must be at least %d characters (e.g. from: openssl rand -base64 32), or empty to not require one", minTokenLength)
 	}
+	for name, cmd := range c.Commands {
+		if !commandNameRE.MatchString(name) {
+			return fmt.Errorf("\"commands\": name %q must be 1-64 letters, digits, '-' or '_', starting with a letter or digit", name)
+		}
+		if len(cmd.Exec) == 0 || cmd.Exec[0] == "" {
+			return fmt.Errorf("\"commands\": %q needs a non-empty \"exec\" list", name)
+		}
+		if !filepath.IsAbs(cmd.Exec[0]) {
+			return fmt.Errorf("\"commands\": %q: exec[0] %q must be an absolute path", name, cmd.Exec[0])
+		}
+		if cmd.TimeoutS < 0 || cmd.TimeoutS > maxCommandTimeoutS {
+			return fmt.Errorf("\"commands\": %q: \"timeout_s\" must be between 0 and %d", name, maxCommandTimeoutS)
+		}
+	}
 	c.Allowed = c.Allowed[:0]
 	for _, s := range c.AllowedIPs {
 		p, err := ParsePrefix(s)
@@ -129,6 +172,29 @@ func (c *Config) Validate() error {
 		c.Allowed = []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")}
 	}
 	return nil
+}
+
+// CommandNames returns the configured command names, sorted.
+func (c *Config) CommandNames() []string {
+	names := make([]string, 0, len(c.Commands))
+	for n := range c.Commands {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// CommandWarnings lists commands whose program is missing or not a file. It's
+// advisory, since the file may be installed later.
+func (c *Config) CommandWarnings() []string {
+	var out []string
+	for _, n := range c.CommandNames() {
+		exe := c.Commands[n].Exec[0]
+		if st, err := os.Stat(exe); err != nil || st.IsDir() {
+			out = append(out, fmt.Sprintf("command %q: %s not found", n, exe))
+		}
+	}
+	return out
 }
 
 // AllowsAnyIP reports whether every source address is allowed, either because

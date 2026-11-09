@@ -94,7 +94,8 @@ Logs on Linux: `journalctl -u powerhook.service -f`
   "allowed_ips": ["192.168.1.5"],
   "action_delay_ms": 1000,
   "dry_run": false,
-  "force_close_apps": false
+  "force_close_apps": false,
+  "commands": {}
 }
 ```
 
@@ -106,6 +107,7 @@ Logs on Linux: `journalctl -u powerhook.service -f`
 | `action_delay_ms` | `1000` | Delay between answering and acting |
 | `dry_run` | `false` | Log actions instead of performing them, which is useful for testing |
 | `force_close_apps` | `false` | Windows only: don't let apps block shutdown/restart (unsaved work is lost) |
+| `commands` | `{}` | Named programs the API can run, see [Commands](#commands) |
 
 Unknown keys are rejected, so a typo like `allowed_ip` fails loudly instead of
 being ignored. After editing, apply the changes with:
@@ -140,6 +142,50 @@ curl -X POST -H "Authorization: Bearer $TOKEN" http://desktop:9876/api/suspend
 ```
 
 `os_id` tells you which OS a dual-boot machine is running (`windows`, `cachyos`, `bazzite`, …).
+
+## Commands
+
+Besides suspend, power off and restart, you can expose your own commands. They
+are defined in the config and the API only ever runs them **by name**: nothing
+from the request (no body, query string or header) reaches the command line.
+
+```json
+{
+  "commands": {
+    "backup": {
+      "exec": ["/usr/local/bin/backup"],
+      "timeout_s": 30
+    }
+  }
+}
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `exec` | required | Program and arguments. Run directly, not through a shell, and `exec[0]` must be an absolute path. For pipes or logic, point it at a script |
+| `timeout_s` | `30` | The command is killed after this many seconds (max 3600) |
+
+Names are 1-64 letters, digits, `-` or `_`.
+
+| Method | Path | Response |
+|--------|------|----------|
+| GET    | `/api/commands` | `200 {"commands":["backup"]}` |
+| POST   | `/api/commands/<name>` | `202 {"status":"accepted","action":"command:<name>","delay_ms":1000}`, or `404` for an unknown name |
+
+```sh
+curl -X POST -H "Authorization: Bearer $TOKEN" http://desktop:9876/api/commands/backup
+```
+
+Commands use the same IP/token checks and the same one-at-a-time rule as the
+built-in actions (`409` while another is pending). The response comes first;
+the command then runs after `action_delay_ms`, and its output and exit status
+go to the log. With `dry_run` they are logged, not run. On Linux a command runs
+as root with a minimal environment (`PATH` and `LANG` only); on Windows it runs
+as SYSTEM and inherits the service's environment.
+
+Treat this as remote code execution for whoever can pass the token and IP
+checks: only list commands you're happy to have run, make the programs
+writable by root only, and keep the token and `allowed_ips` tight.
 
 ## Build
 

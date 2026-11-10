@@ -3,7 +3,7 @@
 A small API that lets you **suspend**, **power off** and
 **restart** a PC over HTTP, e.g. from Home Assistant.
 
-- Token auth, or IP allowlist only if you prefer
+- Bearer-token auth, IP allowlist, or both.
 - IP allowlist (single addresses or CIDR ranges) (with optional firewall management)
 - Runs as a systemd service (Linux) or a Windows service
 

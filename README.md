@@ -3,11 +3,9 @@
 A small API that lets you **suspend**, **power off** and
 **restart** a PC over HTTP, e.g. from Home Assistant.
 
-- Bearer-token auth (constant-time compare), or IP allowlist only if you prefer
-- IP allowlist (single addresses or CIDR ranges), checked before the token
-- Runs as a systemd service (Linux) or a Windows service, so it works before anyone logs in
-- Opens the firewall port only for the allowed IPs
-- Answers `202` first, then acts after `action_delay_ms`, so the caller gets a clean response
+- Token auth, or IP allowlist only if you prefer
+- IP allowlist (single addresses or CIDR ranges) (with optional firewall management)
+- Runs as a systemd service (Linux) or a Windows service
 
 ## Install
 
